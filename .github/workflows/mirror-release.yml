@@ -1,0 +1,50 @@
+name: Copy D2R resources
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: copy-d2r-resources
+  cancel-in-progress: false
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DEST: ${{ github.repository }}
+      COMMIT: ${{ github.sha }}
+      SOURCE: jiayx/d2r-mobile-build
+      TAG: data-3.3.94012-97a2ada74145114ff8364bdc51a756408ef0c6d332e58fefe68eb0ee2b7c4a31
+    steps:
+      - name: Download and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir assets
+          gh release download "$TAG" -R "$SOURCE" --dir assets
+          cd assets
+          sha256sum -c Resources-Parts-SHA256SUMS.txt
+      - name: Upload and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Mirror of https://github.com/$SOURCE/releases/tag/$TAG" > notes.txt
+          if gh release view "$TAG" -R "$DEST" --json isDraft > existing.json; then
+            jq -e '.isDraft == true' existing.json
+          else
+            gh release create "$TAG" -R "$DEST" --target "$COMMIT" --draft --title 'D2R Mobile Data 3.3.94012' --notes-file notes.txt
+          fi
+          for file in assets/*; do
+            gh release upload "$TAG" "$file" -R "$DEST" --clobber
+          done
+          gh release view "$TAG" -R "$DEST" --json assets > uploaded.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          expected = {p.name: p.stat().st_size for p in Path('assets').iterdir()}
+          actual = {a['name']: a['size'] for a in json.load(open('uploaded.json'))['assets']}
+          assert actual == expected, 'Attachment mismatch'
+          print('All attachments verified')
+          PY
+          gh release edit "$TAG" -R "$DEST" --draft=false
